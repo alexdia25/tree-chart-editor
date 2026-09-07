@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tree chart editor</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #E7EBEE; }
+  #boot {
+    max-width: 62ch;
+    margin: 12vh auto;
+    padding: 0 24px;
+    font: 15px/1.7 ui-sans-serif, system-ui, sans-serif;
+    color: #16212B;
+  }
+  #boot h1 { font-size: 20px; font-weight: 600; margin: 0 0 12px; }
+  #boot code, #boot pre {
+    font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  #boot pre {
+    background: #fff;
+    border: 1px solid #C3CED6;
+    padding: 12px 14px;
+    overflow-x: auto;
+  }
+  #boot .why { color: #5F6E7B; font-size: 14px; }
+  #boot .err {
+    background: #fff;
+    border: 1px solid #C3CED6;
+    border-left: 3px solid #8A3B3B;
+    border-radius: 0;
+    padding: 10px 14px;
+    color: #8A3B3B;
+    white-space: pre-wrap;
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<div id="boot">
+  <h1>Loading the editor…</h1>
+  <p class="why">If this message stays on screen, the page couldn't read the component file. See below.</p>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.26.4/babel.min.js"></script>
+
+<script>
+(async function () {
+  var boot = document.getElementById("boot");
+  var CANDIDATES = ["./tree-chart-editor.jsx", "./tree-chart-editor-v3.jsx"];
+
+  function fail(title, bodyHtml) {
+    boot.innerHTML = "<h1>" + title + "</h1>" + bodyHtml;
+  }
+
+  function serverHelp(detail) {
+    return (
+      '<p>Browsers refuse to read a second local file when a page is opened straight from disk, ' +
+      'so this needs to be served over http. From the folder holding both files, run one of these ' +
+      'and then open the address it prints:</p>' +
+      '<pre>python -m http.server 8000\n\nnpx serve .</pre>' +
+      '<p class="why">Both files must sit in the same folder. The component file should be named ' +
+      '<code>tree-chart-editor.jsx</code>.</p>' +
+      (detail ? '<p class="err">' + detail + "</p>" : "")
+    );
+  }
+
+  if (!window.React || !window.ReactDOM || !window.Babel) {
+    return fail(
+      "Couldn't reach the CDN",
+      "<p>React and Babel are loaded from cdnjs.cloudflare.com. Check the network connection, " +
+        "or whether something is blocking that domain.</p>"
+    );
+  }
+
+  var source = null;
+  var lastErr = "";
+  for (var i = 0; i < CANDIDATES.length; i++) {
+    try {
+      var res = await fetch(CANDIDATES[i]);
+      if (res.ok) {
+        source = await res.text();
+        break;
+      }
+      lastErr = CANDIDATES[i] + " returned " + res.status;
+    } catch (e) {
+      lastErr = String(e.message || e);
+    }
+  }
+
+  if (source === null) {
+    return fail("Couldn't read the component file", serverHelp(lastErr));
+  }
+
+  try {
+    var stripped = source
+      .replace(/^\s*import[^\n]*\n/gm, "")
+      .replace(/export\s+default\s+function/, "function");
+
+    var prelude =
+      "const { useState, useRef, useEffect, useMemo, useCallback, useLayoutEffect, useContext, useReducer, Fragment } = React;\n";
+
+    var compiled = Babel.transform(prelude + stripped, {
+      presets: [["react", { runtime: "classic" }]],
+      filename: "tree-chart-editor.jsx",
+    }).code;
+
+    var Component = new Function(
+      "React",
+      compiled + "\nreturn typeof TreeChartEditor !== 'undefined' ? TreeChartEditor : null;"
+    )(React);
+
+    if (typeof Component !== "function") {
+      return fail(
+        "Compiled, but found no component",
+        "<p>The file should export a component named <code>TreeChartEditor</code>. " +
+          "If you renamed it, update the name in the file or in this page.</p>"
+      );
+    }
+
+    boot.remove();
+    ReactDOM.createRoot(document.getElementById("root")).render(
+      React.createElement(Component)
+    );
+  } catch (e) {
+    fail(
+      "The component didn't compile",
+      '<p class="err">' + String(e.message || e) + "</p>"
+    );
+  }
+})();
+</script>
+</body>
+</html>

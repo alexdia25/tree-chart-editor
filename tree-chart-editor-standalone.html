@@ -1,0 +1,1173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tree chart editor</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #E7EBEE; }
+  #boot {
+    max-width: 62ch;
+    margin: 12vh auto;
+    padding: 0 24px;
+    font: 15px/1.7 ui-sans-serif, system-ui, sans-serif;
+    color: #16212B;
+  }
+  #boot h1 { font-size: 20px; font-weight: 600; margin: 0 0 12px; }
+  #boot p { color: #5F6E7B; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<div id="boot">
+  <h1>Loading the editor&hellip;</h1>
+  <p>React and Babel load from cdnjs.cloudflare.com. If this message stays on screen, check the
+  network connection or whether something is blocking that domain.</p>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.26.4/babel.min.js"></script>
+
+<script type="text/babel" data-presets="react">
+const { useState, useRef, useEffect, useMemo, useCallback } = React;
+
+const CW = 46;
+const RH = 58;
+const HEADER = 24;
+
+const SHAPES = [
+  { key: "h", arms: "EW", label: "horizontal" },
+  { key: "v", arms: "NS", label: "vertical" },
+  { key: "tl", arms: "ES", label: "corner, opens down-right" },
+  { key: "td", arms: "WES", label: "tee, branches down" },
+  { key: "tr", arms: "WS", label: "corner, opens down-left" },
+  { key: "tR", arms: "NSE", label: "tee, branches right" },
+  { key: "x", arms: "NSEW", label: "crossing" },
+  { key: "tL", arms: "NSW", label: "tee, branches left" },
+  { key: "bl", arms: "EN", label: "corner, opens up-right" },
+  { key: "tu", arms: "WEN", label: "tee, branches up" },
+  { key: "br", arms: "WN", label: "corner, opens up-left" },
+];
+
+const SHAPE_MAP = Object.fromEntries(SHAPES.map((s) => [s.key, s]));
+const GRID_ORDER = ["tl", "td", "tr", "tR", "x", "tL", "bl", "tu", "br"];
+
+// Tile names decoded from Module:Tree chart/data and from the Familytree
+// template source. The gaps are real: neither template defines every shape
+// for every pairing of line styles.
+const TC = {
+  ss: { h: "-", v: "!", tl: ",", td: "v", tr: ".", tR: ")", x: "+", tL: "(", bl: "`", tu: "^", br: "'" },
+  sd: { h: "-", v: ":", tl: "dj", td: "j", tr: "jc", tR: "d", x: "*", tL: "c", bl: "di", tu: "i", br: "ic" },
+  so: { h: "-", v: "Q", tl: "kr", td: "r", tr: "rl", tR: "k", x: "a", tL: "l", bl: "kq", tu: "q", br: "ql" },
+  ds: { h: "~", v: "!", tl: "fy", td: "y", tr: "ye", tR: "f", x: "t", tL: "e", bl: "fh", tu: "h", br: "he" },
+  dd: { h: "~", v: ":", tl: "F", td: "V", tr: "7", tR: "D", x: "%", tL: "C", bl: "L", tu: "A", br: "J" },
+  do: { h: "~", v: "Q", tl: "kr2", td: "r2", tr: "rl2", tR: "k2", bl: "kq2", br: "ql2" },
+  os: { h: "P", v: "!", tl: "om", td: "m", tr: "mp", tR: "o", x: "b", tL: "p", bl: "on", tu: "n", br: "np" },
+  od: { h: "P", v: ":", tl: "om2", td: "m2", tr: "mp2", tR: "o2", bl: "on2", br: "np2" },
+  oo: { h: "P", v: "Q", tl: "S", td: "M", tr: "T", tR: "H", x: "R", tL: "G", bl: "Y", tu: "W", br: "Z" },
+};
+
+const FT = {
+  ss: { h: "-", v: "!", tl: ",", td: "v", tr: ".", tR: ")", x: "+", tL: "(", bl: "`", tu: "^", br: "'" },
+  sd: { h: "-", v: ":", tl: "p", td: "u", tr: "q", tR: "}", x: "*", tL: "{", bl: "b", tu: "t", br: "d" },
+  ds: { h: "~", v: "!", tl: "r", td: "y", tr: "n", tR: "]", x: "#", tL: "[", bl: "c", br: "j" },
+  dd: { h: "~", v: ":", tl: "F", td: "V", tr: "7", tR: "D", x: "%", tL: "C", bl: "L", tu: "A", br: "J" },
+};
+
+// Duplicate names each template also accepts on input.
+const TC_EXTRA = {
+  l3: ["tL", "s", "s"], T2: ["td", "s", "d"], X: ["x", "s", "d"], U: ["tu", "s", "d"],
+  k3: ["tR", "d", "s"], l4: ["tL", "d", "s"], E: ["tR", "d", "d"], G2: ["tR", "d", "d"],
+  X2: ["x", "d", "d"], K: ["tL", "d", "d"], p2: ["v", "d", "d"], a2: ["tR", "d", "o"],
+  q2: ["bl", "d", "o"], T3: ["tr", "o", "s"], b3: ["x", "o", "s"], b2: ["tR", "o", "d"],
+  n2: ["bl", "o", "d"], l2: ["v", "o", "o"],
+};
+const FT_EXTRA = {
+  T: ["td", "s", "d"], U: ["tu", "s", "d"], X: ["x", "s", "d"],
+  G: ["tR", "d", "d"], K: ["tL", "d", "d"], k: ["tL", "d", "s"],
+};
+
+const DIALECTS = {
+  treechart: { label: "Tree chart", tpl: "Tree chart", names: TC, extra: TC_EXTRA, empties: [" ", "$", "x"] },
+  familytree: { label: "Familytree", tpl: "familytree", names: FT, extra: FT_EXTRA, empties: [" ", "0"] },
+};
+
+function buildLookup(d) {
+  const out = {};
+  for (const combo of Object.keys(d.names)) {
+    const [h, v] = combo.split("");
+    for (const [s, name] of Object.entries(d.names[combo])) {
+      if (!out[name]) out[name] = { s, h: s === "v" ? v : h, v: s === "h" ? h : v };
+    }
+  }
+  for (const [name, [s, h, v]] of Object.entries(d.extra)) if (!out[name]) out[name] = { s, h, v };
+  for (const e of d.empties) out[e] = { s: "blank", h: "s", v: "s" };
+  return out;
+}
+const LOOKUP = Object.fromEntries(Object.entries(DIALECTS).map(([k, d]) => [k, buildLookup(d)]));
+
+function tileName(dialect, cell) {
+  if (cell.s === "blank") return " ";
+  if (cell.s === "raw") return cell.ch;
+  const h = cell.s === "v" ? cell.v : cell.h;
+  const v = cell.s === "h" ? cell.h : cell.v;
+  return DIALECTS[dialect].names[h + v]?.[cell.s] ?? null;
+}
+
+const STYLE_LABEL = { s: "solid", d: "dashed", o: "dotted" };
+const DASH = { s: null, d: "5 3", o: "1 3" };
+
+const C = {
+  paper: "#E7EBEE",
+  sheet: "#FFFFFF",
+  ink: "#16212B",
+  muted: "#5F6E7B",
+  rule: "#C3CED6",
+  accent: "#1F6B5C",
+  soft: "#DCEAE5",
+  warn: "#8A3B3B",
+};
+
+const EXAMPLE = `{{Tree chart| | | |GrMa |~|y|~| GRP | |GrMa=Grandma|GRP=Grandpa}}
+{{Tree chart| | | | | | | |)|-|-|-|.| }}
+{{Tree chart| | | MOM |y| DAD | |DAISY|MOM=Mom|DAD=Dad|DAISY=[[Aunt Daisy]]}}
+{{Tree chart| |,|-|-|-|+|-|-|-|.| | | }}
+{{Tree chart| JOE | | ME | | SIS | | |JOE=Joe|ME=Me|SIS=Sis}}`;
+
+const PASTELS = [
+  "#F6D9D9", "#F7E3C9", "#F3EFC6", "#DCEBD4", "#CFE6E3",
+  "#D3E3F2", "#DDD9EF", "#EEDAE9", "#E6E1D8", "#E3E7EA",
+];
+
+function getBg(style) {
+  const m = /background-color\s*:\s*([^;]+)/i.exec(style || "");
+  return m ? m[1].trim() : null;
+}
+
+function setBg(style, color) {
+  const base = (style || "").trim();
+  if (!color) {
+    const out = base.replace(/background-color\s*:\s*[^;]*;?/i, "").replace(/;\s*;/g, ";").trim();
+    return out.replace(/^;|;$/g, "").trim() || undefined;
+  }
+  if (/background-color\s*:/i.test(base)) {
+    return base.replace(/background-color\s*:\s*[^;]*/i, "background-color: " + color);
+  }
+  return (base ? base.replace(/;?\s*$/, "; ") : "") + "background-color: " + color + ";";
+}
+
+const blank = () => ({ k: "t", s: "blank" });
+
+function normalize(row) {
+  const out = row.slice();
+  for (let i = 0; i < out.length; i++) {
+    if (out[i].k === "b") {
+      if (i + 2 >= out.length || out[i + 1]?.k !== "x" || out[i + 2]?.k !== "x") out[i] = blank();
+      else i += 2;
+    } else if (out[i].k === "x") {
+      out[i] = blank();
+    }
+  }
+  return out;
+}
+
+function splitParams(s) {
+  const out = [];
+  let depth = 0;
+  let cur = "";
+  for (let i = 0; i < s.length; i++) {
+    const two = s.slice(i, i + 2);
+    if (two === "[[" || two === "{{") { depth++; cur += two; i++; continue; }
+    if (two === "]]" || two === "}}") { depth = Math.max(0, depth - 1); cur += two; i++; continue; }
+    if (s[i] === "|" && depth === 0) { out.push(cur); cur = ""; continue; }
+    cur += s[i];
+  }
+  out.push(cur);
+  return out;
+}
+
+function parseWikitext(text) {
+  const rowRe = /^\s*\{\{\s*(tree chart|familytree|family tree|chart)\s*\|(.*)\}\}\s*$/i;
+  const startRe = /^\s*\{\{\s*(tree chart|familytree|family tree|chart)\s*\/start\s*(?:\|(.*))?\}\}\s*$/i;
+  const rows = [];
+  let seen = null;
+  let align = null;
+  let summary = null;
+  let tpl = null;
+  const lines = text.split("\n");
+  let startLine = -1;
+  let endLine = -1;
+  const endRe = /^\s*\{\{\s*(?:tree chart|familytree|family tree|chart)\s*\/end\s*\}\}\s*$/i;
+  for (let li = 0; li < lines.length; li++) {
+    const line = lines[li];
+    if (endLine < 0 && endRe.test(line)) { endLine = li; continue; }
+    const sm = line.match(startRe);
+    if (sm) {
+      if (!seen) { seen = dialectOf(sm[1]); tpl = sm[1]; }
+      if (startLine < 0) startLine = li;
+      align = "left";
+      summary = "";
+      for (const raw of splitParams(sm[2] || "")) {
+        const eq = raw.indexOf("=");
+        if (eq < 0) continue;
+        const key = raw.slice(0, eq).trim().toLowerCase();
+        const val = raw.slice(eq + 1).trim();
+        if (key === "align" && ["left", "center", "right"].includes(val)) align = val;
+        if (key === "summary") summary = val;
+      }
+      continue;
+    }
+    const m = line.match(rowRe);
+    if (!m) continue;
+    if (!seen) { seen = dialectOf(m[1]); tpl = m[1]; }
+    const parts = splitParams(m[2]);
+    const labels = {};
+    const styles = {};
+    const positional = [];
+    for (const raw of parts) {
+      const eq = raw.indexOf("=");
+      if (eq > 0 && /^[A-Za-z0-9_][A-Za-z0-9_ -]*$/.test(raw.slice(0, eq).trim())) {
+        const key = raw.slice(0, eq).trim();
+        const bs = /^boxstyle_(.+)$/i.exec(key);
+        if (bs) { styles[bs[1].trim()] = raw.slice(eq + 1).trim(); continue; }
+        if (/^(border|boxstyle|colspan|rowspan)/i.test(key)) continue;
+        labels[key] = raw.slice(eq + 1).trim();
+        continue;
+      }
+      positional.push(raw);
+    }
+    const primary = LOOKUP[seen];
+    const other = LOOKUP[seen === "treechart" ? "familytree" : "treechart"];
+    const cells = [];
+    for (const raw of positional) {
+      const v = raw.trim();
+      if (v === "") { cells.push(blank()); continue; }
+      if (labels[v] !== undefined) { cells.push({ k: "b", label: labels[v], style: styles[v] }, { k: "x" }, { k: "x" }); continue; }
+      const t = primary[v] || other[v];
+      if (t) cells.push({ k: "t", ...t });
+      else if (v.length <= 3 && !/[A-Za-z]{2}/.test(v)) cells.push({ k: "t", s: "raw", ch: v });
+      else cells.push({ k: "b", label: v, style: styles[v] }, { k: "x" }, { k: "x" });
+    }
+    rows.push({ cells, line: li });
+  }
+  if (!rows.length) return null;
+  if (!seen) seen = "treechart";
+  if (!tpl) tpl = DIALECTS[seen].tpl;
+  const cols = Math.max(...rows.map((r) => r.cells.length));
+  return {
+    dialect: seen,
+    align,
+    summary,
+    cols,
+    tpl,
+    doc: { lines, startLine, endLine, rows, dialect: seen, tpl },
+    grid: rows.map((r) => {
+      const copy = r.cells.slice();
+      while (copy.length < cols) copy.push(blank());
+      return copy;
+    }),
+  };
+}
+
+function makeId(label, taken, reserved) {
+  let base = (label || "")
+    .replace(/\[\[|\]\]/g, "").split("|").pop()
+    .replace(/[^A-Za-z0-9]/g, "").slice(0, 8).toUpperCase();
+  if (base.replace(/[^A-Za-z]/g, "").length < 2) base = "BOX";
+  let id = base;
+  let n = 2;
+  while (taken.has(id) || reserved[id]) id = base + n++;
+  return id;
+}
+
+const dialectOf = (name) => (/family\s*tree/i.test(name) ? "familytree" : "treechart");
+
+function startLineFor(tpl, opts) {
+  const args = [];
+  if (opts.summary.trim()) args.push("summary=" + opts.summary.trim());
+  if (opts.align !== "left") args.push("align=" + opts.align);
+  return "{{" + tpl + "/start" + args.map((a) => "|" + a).join("") + "}}";
+}
+
+function endLineFor(tpl) {
+  return "{{" + tpl + "/end}}";
+}
+
+function rowLineFor(row, dialect, tpl) {
+  const reserved = LOOKUP[dialect];
+  const cells = [];
+  const named = [];
+  const styled = [];
+  const taken = new Set();
+  for (const cell of row) {
+    if (cell.k === "x") continue;
+    if (cell.k === "t") { cells.push(tileName(dialect, cell) ?? " "); continue; }
+    const id = makeId(cell.label, taken, reserved);
+    taken.add(id);
+    cells.push(id + " ");
+    named.push(id + "=" + (cell.label || id));
+    if (cell.style) styled.push("boxstyle_" + id + "=" + cell.style);
+  }
+  while (cells.length && cells[cells.length - 1] === " ") cells.pop();
+  if (!cells.length) cells.push(" ");
+  return (
+    "{{" + tpl +
+    cells.map((c) => "|" + c).join("") +
+    named.map((n) => "|" + n).join("") +
+    styled.map((n) => "|" + n).join("") +
+    "}}"
+  );
+}
+
+function toWikitext(grid, dialect, opts) {
+  const tpl = opts.tpl || DIALECTS[dialect].tpl;
+  return [
+    startLineFor(tpl, opts),
+    ...grid.map((r) => rowLineFor(r, dialect, tpl)),
+    endLineFor(tpl),
+  ].join("\n");
+}
+
+function lcsPairs(a, b) {
+  const n = a.length;
+  const m = b.length;
+  const dp = Array.from({ length: n + 1 }, () => new Int32Array(m + 1));
+  for (let i = n - 1; i >= 0; i--)
+    for (let j = m - 1; j >= 0; j--)
+      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+  const pairs = [];
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) { pairs.push([i, j]); i++; j++; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) i++;
+    else j++;
+  }
+  return pairs;
+}
+
+// Rewrite only what changed. Rows whose content is untouched keep their original
+// line verbatim, so hand-spacing, alias tile names and any surrounding wikitext
+// survive an edit made on the grid.
+function mergeWikitext(doc, grid, dialect, opts) {
+  const tpl = opts.tpl || DIALECTS[dialect].tpl;
+  const start = startLineFor(tpl, opts);
+  const end = endLineFor(tpl);
+  const fresh = grid.map((row) => rowLineFor(row, dialect, tpl));
+  if (!doc || !doc.rows.length) return [start, ...fresh, end].join("\n");
+
+  const reuse = doc.dialect === dialect && doc.tpl === tpl;
+  const previous = doc.rows.map((r) => rowLineFor(r.cells, dialect, tpl));
+  const pairs = reuse ? lcsPairs(previous, fresh) : [];
+  const oldToNew = new Map(pairs);
+  const rowAt = new Map(doc.rows.map((r, i) => [r.line, i]));
+
+  const out = [];
+  let ni = 0;
+  const flushTo = (limit) => { while (ni < limit) { out.push(fresh[ni]); ni++; } };
+  let sawStart = false;
+  let sawEnd = false;
+
+  for (let li = 0; li < doc.lines.length; li++) {
+    if (li === doc.startLine) { out.push(start); sawStart = true; continue; }
+    if (li === doc.endLine) { flushTo(fresh.length); out.push(end); sawEnd = true; continue; }
+    const oi = rowAt.get(li);
+    if (oi === undefined) { out.push(doc.lines[li]); continue; }
+    const nj = oldToNew.get(oi);
+    if (nj === undefined) continue;
+    flushTo(nj);
+    out.push(doc.lines[li]);
+    ni = nj + 1;
+  }
+  if (!sawEnd) { flushTo(fresh.length); out.push(end); }
+  if (!sawStart) out.unshift(start);
+  return out.join("\n");
+}
+
+function Glyph({ arms, hs, vs, size = 24, color = C.ink }) {
+  const m = size / 2;
+  const seg = [];
+  if (arms.includes("N")) seg.push([m, 0, m, m, vs]);
+  if (arms.includes("S")) seg.push([m, m, m, size, vs]);
+  if (arms.includes("W")) seg.push([0, m, m, m, hs]);
+  if (arms.includes("E")) seg.push([m, m, size, m, hs]);
+  return (
+    <svg width={size} height={size} aria-hidden="true">
+      {seg.map(([x1, y1, x2, y2, st], i) => (
+        <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke={color} strokeWidth="1.6"
+          strokeLinecap={st === "o" ? "round" : "butt"} strokeDasharray={DASH[st] || undefined} />
+      ))}
+      {!seg.length && <circle cx={m} cy={m} r="1.5" fill={color} opacity="0.35" />}
+    </svg>
+  );
+}
+
+function TreeChartEditor() {
+  const initial = useMemo(() => parseWikitext(EXAMPLE), []);
+  const [grid, setGrid] = useState(initial.grid);
+  const [cols, setCols] = useState(initial.cols);
+  const [dialect, setDialect] = useState("treechart");
+  const [tplName, setTplName] = useState(DIALECTS.treechart.tpl);
+  const [hs, setHs] = useState("s");
+  const [vs, setVs] = useState("s");
+  const [tool, setTool] = useState({ kind: "shape", shape: "h" });
+  const [align, setAlign] = useState("center");
+  const [summary, setSummary] = useState("");
+  const [text, setText] = useState(() =>
+    toWikitext(initial.grid, "treechart", { align: "center", summary: "" })
+  );
+  const [textError, setTextError] = useState("");
+  const [copied, setCopied] = useState(false);
+  const [note, setNote] = useState("");
+  const [drag, setDrag] = useState(null);
+  const [selected, setSelected] = useState(null);
+  const painting = useRef(false);
+  const fromText = useRef(false);
+  const docRef = useRef(undefined);
+  const gridRef = useRef(null);
+
+  if (docRef.current === undefined) {
+    docRef.current = parseWikitext(
+      toWikitext(initial.grid, "treechart", { align: "center", summary: "" })
+    )?.doc ?? null;
+  }
+
+  const hasDotted = dialect === "treechart";
+
+  useEffect(() => {
+    if (!hasDotted) {
+      if (hs === "o") setHs("s");
+      if (vs === "o") setVs("s");
+    }
+  }, [hasDotted, hs, vs]);
+
+  const nameFor = useCallback(
+    (shape) => tileName(dialect, { s: shape, h: hs, v: vs }),
+    [dialect, hs, vs]
+  );
+
+  useEffect(() => {
+    if (fromText.current) {
+      fromText.current = false;
+      return;
+    }
+    const next = mergeWikitext(docRef.current, grid, dialect, { align, summary, tpl: tplName });
+    setText(next);
+    docRef.current = parseWikitext(next)?.doc ?? null;
+    setTextError("");
+  }, [grid, dialect, tplName, align, summary]);
+
+  const editText = (value) => {
+    setText(value);
+    const parsed = parseWikitext(value);
+    if (!parsed) {
+      setTextError("Nothing parsed yet — a chart needs at least one {{" + tplName + "|…}} row.");
+      return;
+    }
+    setTextError("");
+    fromText.current = true;
+    docRef.current = parsed.doc;
+    setGrid(parsed.grid);
+    setCols(parsed.cols);
+    setDialect(parsed.dialect);
+    setTplName(parsed.tpl);
+    if (parsed.align !== null) setAlign(parsed.align);
+    if (parsed.summary !== null) setSummary(parsed.summary);
+  };
+
+  const chooseDialect = (k) => {
+    setDialect(k);
+    setTplName(DIALECTS[k].tpl);
+  };
+
+  const dropped = useMemo(() => {
+    const out = [];
+    grid.forEach((row, r) =>
+      row.forEach((cell, c) => {
+        if (cell.k === "t" && cell.s !== "blank" && cell.s !== "raw" && tileName(dialect, cell) === null) {
+          out.push({ r, c, cell });
+        }
+      })
+    );
+    return out;
+  }, [grid, dialect]);
+
+  useEffect(() => {
+    const up = () => (painting.current = false);
+    window.addEventListener("mouseup", up);
+    return () => window.removeEventListener("mouseup", up);
+  }, []);
+
+  useEffect(() => {
+    const keys = {
+      "-": "h", "|": "v", "!": "v", ",": "tl", v: "td", ".": "tr",
+      ")": "tR", "+": "x", "(": "tL", "`": "bl", "^": "tu", "'": "br",
+    };
+    const onKey = (e) => {
+      const t = e.target.tagName;
+      if (t === "INPUT" || t === "TEXTAREA" || t === "SELECT") return;
+      if (e.key === "b") return setTool({ kind: "box" });
+      if (e.key === " ") { e.preventDefault(); return setTool({ kind: "blank" }); }
+      if (keys[e.key]) setTool({ kind: "shape", shape: keys[e.key] });
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  const paint = useCallback(
+    (r, c) => {
+      setGrid((g) => {
+        const next = g.map((row) => row.slice());
+        if (tool.kind === "box") {
+          if (c + 2 >= cols) return g;
+          for (let i = 0; i < 3; i++) if (next[r][c + i].k !== "t") return g;
+          next[r][c] = { k: "b", label: "Name" };
+          next[r][c + 1] = { k: "x" };
+          next[r][c + 2] = { k: "x" };
+          return next;
+        }
+        if (next[r][c].k !== "t") return g;
+        if (tool.kind === "blank") next[r][c] = blank();
+        else {
+          if (!nameFor(tool.shape)) return g;
+          next[r][c] = { k: "t", s: tool.shape, h: hs, v: vs };
+        }
+        return next;
+      });
+    },
+    [tool, cols, hs, vs, nameFor]
+  );
+
+  const removeBox = (r, c) =>
+    setGrid((g) => {
+      const next = g.map((row) => row.slice());
+      for (let i = 0; i < 3; i++) next[r][c + i] = blank();
+      return next;
+    });
+
+  const setLabel = (r, c, label) =>
+    setGrid((g) => {
+      const next = g.map((row) => row.slice());
+      next[r][c] = { ...next[r][c], label };
+      return next;
+    });
+
+  const selectedBox =
+    selected && grid[selected.r]?.[selected.c]?.k === "b" ? grid[selected.r][selected.c] : null;
+  const selectedColor = selectedBox ? getBg(selectedBox.style) : null;
+
+  const setBoxColor = (color) => {
+    if (!selected) return;
+    const { r, c } = selected;
+    setGrid((g) => {
+      if (g[r]?.[c]?.k !== "b") return g;
+      const next = g.map((row) => row.slice());
+      next[r][c] = { ...next[r][c], style: setBg(next[r][c].style, color) };
+      return next;
+    });
+  };
+
+  const canDrop = useCallback(
+    (from, r, c) => {
+      if (c < 0 || r < 0 || c + 2 >= cols || r >= grid.length) return false;
+      for (let i = 0; i < 3; i++) {
+        if (r === from.r && c + i >= from.c && c + i <= from.c + 2) continue;
+        const cell = grid[r][c + i];
+        if (cell.k !== "t" || cell.s !== "blank") return false;
+      }
+      return true;
+    },
+    [grid, cols]
+  );
+
+  const moveBox = (from, r, c) => {
+    setGrid((g) => {
+      const next = g.map((row) => row.slice());
+      const box = next[from.r][from.c];
+      for (let i = 0; i < 3; i++) next[from.r][from.c + i] = blank();
+      next[r][c] = box;
+      next[r][c + 1] = { k: "x" };
+      next[r][c + 2] = { k: "x" };
+      return next;
+    });
+    setSelected((s) => (s && s.r === from.r && s.c === from.c ? { r, c } : s));
+  };
+
+  useEffect(() => {
+    if (!drag) return;
+    const move = (e) => {
+      const rect = gridRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const x = e.clientX - rect.left - drag.offset.x;
+      const y = e.clientY - rect.top - drag.offset.y;
+      const c = Math.max(0, Math.min(cols - 3, Math.round((x - 3) / CW)));
+      const r = Math.max(0, Math.min(grid.length - 1, Math.round((y - 8) / RH)));
+      setDrag((d) => (d ? { ...d, to: { r, c }, ok: canDrop(d.from, r, c) } : d));
+    };
+    const up = () =>
+      setDrag((d) => {
+        if (d?.to && d.ok && (d.to.r !== d.from.r || d.to.c !== d.from.c)) moveBox(d.from, d.to.r, d.to.c);
+        return null;
+      });
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+    return () => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+    };
+  }, [drag, cols, grid.length, canDrop]);
+
+  const nudge = (e, r, c) => {
+    if (!e.altKey) return;
+    const d = { ArrowLeft: [0, -1], ArrowRight: [0, 1], ArrowUp: [-1, 0], ArrowDown: [1, 0] }[e.key];
+    if (!d) return;
+    e.preventDefault();
+    if (canDrop({ r, c }, r + d[0], c + d[1])) moveBox({ r, c }, r + d[0], c + d[1]);
+  };
+
+  const insertCol = (at) => {
+    setGrid((g) =>
+      g.map((row) => {
+        let pos = Math.min(at, row.length);
+        while (pos > 0 && pos < row.length && row[pos].k === "x") pos--;
+        const next = row.slice();
+        next.splice(pos, 0, blank());
+        return next;
+      })
+    );
+    setCols((n) => n + 1);
+    setNote("");
+  };
+
+  const colBlocked = (i) => grid.some((row) => row[i] && row[i].k !== "t");
+
+  const deleteCol = (at) => {
+    if (cols <= 3) return;
+    if (colBlocked(at)) {
+      setNote("Column " + (at + 1) + " runs through a box. Move the box first, or delete it.");
+      return;
+    }
+    setGrid((g) => g.map((row) => normalize(row.filter((_, i) => i !== at))));
+    setCols((n) => n - 1);
+    setNote("");
+  };
+
+  const resizeCols = (n) => {
+    const target = Math.max(3, Math.min(36, n || 3));
+    setGrid((g) =>
+      g.map((row) => {
+        const copy = row.slice(0, target);
+        while (copy.length < target) copy.push(blank());
+        return normalize(copy);
+      })
+    );
+    setCols(target);
+  };
+
+  const addRow = (at) =>
+    setGrid((g) => {
+      const next = g.slice();
+      next.splice(at, 0, Array.from({ length: cols }, blank));
+      return next;
+    });
+
+  const removeRow = (at) => setGrid((g) => (g.length > 1 ? g.filter((_, i) => i !== at) : g));
+
+  const armsOf = (cell) => (cell.s === "raw" || cell.s === "blank" ? "" : SHAPE_MAP[cell.s]?.arms ?? "");
+
+  const segments = [];
+  const marks = [];
+  grid.forEach((row, r) => {
+    row.forEach((cell, c) => {
+      if (cell.k !== "t") return;
+      const x = c * CW + CW / 2;
+      const y = r * RH + RH / 2;
+      if (cell.s === "raw") { marks.push({ x, y, text: cell.ch }); return; }
+      const arms = armsOf(cell);
+      if (!arms) return;
+      const tone = tileName(dialect, cell) === null ? C.warn : C.ink;
+      if (arms.includes("N")) segments.push([x, r * RH, x, y, cell.v, tone]);
+      if (arms.includes("S")) segments.push([x, y, x, (r + 1) * RH, cell.v, tone]);
+      if (arms.includes("W")) segments.push([c * CW, y, x, y, cell.h, tone]);
+      if (arms.includes("E")) segments.push([x, y, (c + 1) * CW, y, cell.h, tone]);
+    });
+  });
+  grid.forEach((row, r) => {
+    row.forEach((cell, c) => {
+      if (cell.k !== "b") return;
+      const x = (c + 1) * CW + CW / 2;
+      const a = grid[r - 1]?.[c + 1];
+      const b = grid[r + 1]?.[c + 1];
+      if (a?.k === "t" && armsOf(a).includes("S")) segments.push([x, r * RH, x, r * RH + 8, a.v, C.ink]);
+      if (b?.k === "t" && armsOf(b).includes("N")) segments.push([x, (r + 1) * RH - 8, x, (r + 1) * RH, b.v, C.ink]);
+    });
+  });
+
+  const copy = () => {
+    navigator.clipboard?.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1600);
+  };
+
+  const btn = (active, extra = {}) => ({
+    background: active ? C.accent : C.sheet,
+    color: active ? C.sheet : C.ink,
+    border: "1px solid " + (active ? C.accent : C.rule),
+    borderRadius: 3,
+    cursor: "pointer",
+    font: "inherit",
+    fontSize: 13,
+    padding: "6px 10px",
+    ...extra,
+  });
+
+  const shapeBtn = (key) => {
+    const active = tool.kind === "shape" && tool.shape === key;
+    const name = nameFor(key);
+    const off = !name;
+    return (
+      <button
+        key={key}
+        disabled={off}
+        onClick={() => setTool({ kind: "shape", shape: key })}
+        title={
+          off
+            ? SHAPE_MAP[key].label + " — no " + STYLE_LABEL[hs] + "/" + STYLE_LABEL[vs] + " tile in " + DIALECTS[dialect].label
+            : SHAPE_MAP[key].label + " — " + name
+        }
+        style={{
+          ...btn(active),
+          padding: "5px 0 3px",
+          display: "grid",
+          placeItems: "center",
+          gap: 1,
+          width: "100%",
+          opacity: off ? 0.32 : 1,
+          cursor: off ? "not-allowed" : "pointer",
+        }}
+      >
+        <Glyph arms={SHAPE_MAP[key].arms} hs={hs} vs={vs} color={active ? C.sheet : C.ink} />
+        <span style={{ font: "11px/1.2 'IBM Plex Mono', ui-monospace, monospace", color: active ? C.soft : C.muted }}>
+          {name || "—"}
+        </span>
+      </button>
+    );
+  };
+
+  const styleRow = (label, value, set) => (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+      <span style={{ fontSize: 13, color: C.muted, width: 66 }}>{label}</span>
+      <div style={{ display: "flex", gap: 4 }}>
+        {["s", "d", "o"].map((k) => {
+          const off = k === "o" && !hasDotted;
+          return (
+            <button
+              key={k}
+              disabled={off}
+              onClick={() => set(k)}
+              title={off ? "Familytree has no dotted tiles" : undefined}
+              style={{
+                ...btn(value === k),
+                padding: "4px 9px",
+                fontSize: 12,
+                opacity: off ? 0.32 : 1,
+                cursor: off ? "not-allowed" : "pointer",
+              }}
+            >
+              {STYLE_LABEL[k]}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+
+  return (
+    <div
+      style={{
+        background: C.paper,
+        color: C.ink,
+        minHeight: "100vh",
+        padding: "28px 24px 48px",
+        fontFamily: "'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif",
+      }}
+    >
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
+        .cellbtn { background: transparent; border: 0; padding: 0; cursor: crosshair; }
+        .cellbtn:hover { background: rgba(31,107,92,0.10); }
+        .cellbtn:focus-visible { outline: 2px solid ${C.accent}; outline-offset: -2px; }
+        .boxwrap .kill { opacity: 0; }
+        .boxwrap:hover .kill, .boxwrap:focus-within .kill { opacity: 1; }
+        .grip { cursor: grab; color: ${C.rule}; }
+        .grip:active { cursor: grabbing; }
+        .boxwrap:hover .grip, .boxwrap:focus-within .grip { color: ${C.muted}; }
+        .colbtn { background: transparent; border: 0; padding: 0; width: 19px; height: 19px;
+                  border-radius: 3px; color: ${C.rule}; cursor: pointer; font: inherit; font-size: 13px; line-height: 1; }
+        .colbtn:hover:not(:disabled) { color: ${C.sheet}; background: ${C.accent}; }
+        .colbtn:disabled { cursor: not-allowed; opacity: 0.35; }
+        input:focus-visible, textarea:focus-visible, button:focus-visible, select:focus-visible {
+          outline: 2px solid ${C.accent}; outline-offset: 1px;
+        }
+      `}</style>
+
+      <div style={{ maxWidth: 1120, margin: "0 auto" }}>
+        <header style={{ marginBottom: 20 }}>
+          <h1 style={{ fontSize: 25, fontWeight: 600, margin: 0, letterSpacing: "-0.01em" }}>
+            Tree chart editor
+          </h1>
+          <p style={{ margin: "6px 0 0", color: C.muted, fontSize: 14, maxWidth: "64ch" }}>
+            Draw the tree on the grid, then copy the wikitext into your wiki. Pick the template your
+            wiki uses first — the two have different tile names, and Familytree has no dotted lines.
+          </p>
+        </header>
+
+        <div style={{ display: "flex", gap: 16, alignItems: "flex-start", flexWrap: "wrap" }}>
+          <aside style={{ flex: "0 0 236px", background: C.sheet, border: "1px solid " + C.rule, padding: 14 }}>
+            <div style={{ display: "flex", gap: 5, marginBottom: 14 }}>
+              {Object.entries(DIALECTS).map(([k, d]) => (
+                <button key={k} onClick={() => chooseDialect(k)} style={{ ...btn(dialect === k), flex: 1, fontSize: 12 }}>
+                  {d.label}
+                </button>
+              ))}
+            </div>
+
+            {styleRow("Horizontal", hs, setHs)}
+            {styleRow("Vertical", vs, setVs)}
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 5, marginTop: 14 }}>
+              {shapeBtn("h")}
+              {shapeBtn("v")}
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 5, marginTop: 5 }}>
+              {GRID_ORDER.map(shapeBtn)}
+            </div>
+
+            <div style={{ display: "flex", gap: 5, marginTop: 12 }}>
+              <button onClick={() => setTool({ kind: "blank" })} style={{ ...btn(tool.kind === "blank"), flex: 1 }}>
+                Erase
+              </button>
+              <button onClick={() => setTool({ kind: "box" })} style={{ ...btn(tool.kind === "box"), flex: 1 }}>
+                Box
+              </button>
+            </div>
+
+            <div style={{ marginTop: 14, borderTop: "1px solid " + C.rule, paddingTop: 12 }}>
+              <div style={{ fontSize: 13, color: C.muted, marginBottom: 7 }}>
+                Box colour{selectedBox ? "" : " — select a box"}
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 4, opacity: selectedBox ? 1 : 0.4 }}>
+                {PASTELS.map((p) => {
+                  const on = selectedColor && selectedColor.toLowerCase() === p.toLowerCase();
+                  return (
+                    <button
+                      key={p}
+                      disabled={!selectedBox}
+                      onClick={() => setBoxColor(p)}
+                      title={p}
+                      aria-label={"Set box colour " + p}
+                      style={{
+                        height: 22,
+                        background: p,
+                        border: "1px solid " + (on ? C.ink : C.rule),
+                        boxShadow: on ? "inset 0 0 0 2px " + C.sheet : "none",
+                        borderRadius: 3,
+                        cursor: selectedBox ? "pointer" : "not-allowed",
+                        padding: 0,
+                      }}
+                    />
+                  );
+                })}
+              </div>
+              <div style={{ display: "flex", gap: 5, marginTop: 6, alignItems: "center" }}>
+                <button
+                  disabled={!selectedBox}
+                  onClick={() => setBoxColor(null)}
+                  style={{ ...btn(false), flex: 1, fontSize: 12, opacity: selectedBox ? 1 : 0.4 }}
+                >
+                  None
+                </button>
+                <input
+                  type="color"
+                  disabled={!selectedBox}
+                  value={selectedColor && /^#[0-9a-f]{6}$/i.test(selectedColor) ? selectedColor : "#ffffff"}
+                  onChange={(e) => setBoxColor(e.target.value)}
+                  aria-label="Custom box colour"
+                  title="Custom colour"
+                  style={{
+                    width: 38, height: 28, padding: 2, borderRadius: 3,
+                    border: "1px solid " + C.rule, background: C.sheet,
+                    cursor: selectedBox ? "pointer" : "not-allowed",
+                  }}
+                />
+              </div>
+            </div>
+
+            <p style={{ fontSize: 12, color: C.muted, margin: "12px 0 0", lineHeight: 1.6 }}>
+              A dashed horizontal into a solid vertical tee is the conventional marriage link. Both
+              templates happen to call it <code style={{ font: "12px 'IBM Plex Mono', monospace" }}>y</code>.
+            </p>
+          </aside>
+
+          <div style={{ flex: "1 1 520px", minWidth: 0 }}>
+            <div style={{ background: C.sheet, border: "1px solid " + C.rule, padding: "10px 12px 16px", overflowX: "auto" }}>
+              <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+                <div style={{ flex: "none" }}>
+                  <div style={{ display: "flex", height: HEADER, alignItems: "center" }}>
+                    {Array.from({ length: cols }, (_, i) => (
+                      <div key={i} style={{ width: CW, display: "flex", justifyContent: "center", gap: 2 }}>
+                        <button className="colbtn" onClick={() => insertCol(i)} title={"Insert a column before column " + (i + 1)}>+</button>
+                        <button
+                          className="colbtn"
+                          onClick={() => deleteCol(i)}
+                          disabled={cols <= 3 || colBlocked(i)}
+                          title={colBlocked(i) ? "Column " + (i + 1) + " runs through a box" : "Delete column " + (i + 1)}
+                        >−</button>
+                      </div>
+                    ))}
+                    <button className="colbtn" onClick={() => insertCol(cols)} title="Add a column at the end" style={{ marginLeft: 4 }}>+</button>
+                  </div>
+
+                  <div
+                    ref={gridRef}
+                    style={{ position: "relative", width: cols * CW, height: grid.length * RH }}
+                    onMouseLeave={() => (painting.current = false)}
+                  >
+                    <svg width={cols * CW} height={grid.length * RH} style={{ position: "absolute", inset: 0 }} aria-hidden="true">
+                      {Array.from({ length: cols + 1 }, (_, i) => (
+                        <line key={"v" + i} x1={i * CW} y1={0} x2={i * CW} y2={grid.length * RH} stroke={C.rule} strokeWidth="0.5" opacity="0.55" />
+                      ))}
+                      {Array.from({ length: grid.length + 1 }, (_, i) => (
+                        <line key={"h" + i} x1={0} y1={i * RH} x2={cols * CW} y2={i * RH} stroke={C.rule} strokeWidth="0.5" opacity="0.55" />
+                      ))}
+                      {segments.map(([x1, y1, x2, y2, st, tone], i) => (
+                        <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke={tone} strokeWidth="1.6"
+                          strokeLinecap={st === "o" ? "round" : "butt"} strokeDasharray={DASH[st] || undefined} />
+                      ))}
+                      {marks.map((u, i) => (
+                        <text key={i} x={u.x} y={u.y + 4} textAnchor="middle" fill={C.warn} style={{ font: "11px 'IBM Plex Mono', monospace" }}>
+                          {u.text}
+                        </text>
+                      ))}
+                    </svg>
+
+                    {grid.map((row, r) =>
+                      row.map((cell, c) =>
+                        cell.k === "t" ? (
+                          <button
+                            key={r + "-" + c}
+                            className="cellbtn"
+                            aria-label={"Row " + (r + 1) + ", column " + (c + 1)}
+                            onMouseDown={() => { if (drag) return; painting.current = true; paint(r, c); }}
+                            onMouseEnter={() => painting.current && !drag && tool.kind !== "box" && paint(r, c)}
+                            style={{ position: "absolute", left: c * CW, top: r * RH, width: CW, height: RH }}
+                          />
+                        ) : null
+                      )
+                    )}
+
+                    {drag?.to && (
+                      <div
+                        style={{
+                          position: "absolute",
+                          left: drag.to.c * CW + 3,
+                          top: drag.to.r * RH + 8,
+                          width: CW * 3 - 6,
+                          height: RH - 16,
+                          border: "1.6px dashed " + (drag.ok ? C.accent : C.warn),
+                          background: drag.ok ? "rgba(31,107,92,0.08)" : "rgba(138,59,59,0.08)",
+                          pointerEvents: "none",
+                        }}
+                      />
+                    )}
+
+                    {grid.map((row, r) =>
+                      row.map((cell, c) =>
+                        cell.k === "b" ? (
+                          <div
+                            key={"b-" + r + "-" + c}
+                            className="boxwrap"
+                            onMouseDown={() => setSelected({ r, c })}
+                            style={{
+                              position: "absolute",
+                              left: c * CW + 3,
+                              top: r * RH + 8,
+                              width: CW * 3 - 6,
+                              height: RH - 16,
+                              border: "1.6px solid " + C.ink,
+                              outline: selected && selected.r === r && selected.c === c ? "2px solid " + C.accent : "none",
+                              outlineOffset: 1,
+                              background: getBg(cell.style) || C.sheet,
+                              display: "flex",
+                              alignItems: "center",
+                              opacity: drag && drag.from.r === r && drag.from.c === c ? 0.4 : 1,
+                            }}
+                          >
+                            <span
+                              className="grip"
+                              role="button"
+                              tabIndex={-1}
+                              aria-label="Drag to move this box"
+                              title="Drag to move"
+                              onMouseDown={(e) => {
+                                e.preventDefault();
+                                const rect = gridRef.current.getBoundingClientRect();
+                                setDrag({
+                                  from: { r, c },
+                                  offset: { x: e.clientX - rect.left - (c * CW + 3), y: e.clientY - rect.top - (r * RH + 8) },
+                                  to: { r, c },
+                                  ok: true,
+                                });
+                              }}
+                              style={{
+                                width: 11, height: "100%", display: "grid", placeItems: "center",
+                                font: "10px/1 'IBM Plex Mono', monospace", letterSpacing: "-1px",
+                                flex: "none", userSelect: "none",
+                              }}
+                            >
+                              ⣿
+                            </span>
+                            <input
+                              value={cell.label}
+                              onChange={(e) => setLabel(r, c, e.target.value)}
+                              onFocus={() => setSelected({ r, c })}
+                              onKeyDown={(e) => nudge(e, r, c)}
+                              aria-label="Box text. Hold alt and press an arrow key to move it."
+                              style={{
+                                width: "100%", height: "100%", border: 0, background: "transparent",
+                                textAlign: "center", font: "inherit", fontSize: 13, color: C.ink, padding: "0 4px 0 0",
+                              }}
+                            />
+                            <button
+                              className="kill"
+                              onClick={() => removeBox(r, c)}
+                              aria-label="Remove box"
+                              style={{
+                                position: "absolute", top: -8, right: -8, width: 18, height: 18,
+                                borderRadius: 9, border: "1px solid " + C.rule, background: C.sheet,
+                                color: C.muted, cursor: "pointer", font: "inherit", fontSize: 12,
+                                lineHeight: "16px", padding: 0,
+                              }}
+                            >
+                              ×
+                            </button>
+                          </div>
+                        ) : null
+                      )
+                    )}
+                  </div>
+                </div>
+
+                <div style={{ flex: "none", paddingTop: HEADER }}>
+                  {grid.map((_, r) => (
+                    <div key={r} style={{ height: RH, display: "flex", alignItems: "center", gap: 4 }}>
+                      <button onClick={() => addRow(r + 1)} title={"Insert a row below row " + (r + 1)} style={btn(false, { padding: "2px 7px", color: C.muted })}>+</button>
+                      <button onClick={() => removeRow(r)} title={"Delete row " + (r + 1)} style={btn(false, { padding: "2px 7px", color: C.muted })}>−</button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div
+              style={{
+                display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center",
+                padding: "10px 12px", background: C.sheet, border: "1px solid " + C.rule, borderTop: "none",
+              }}
+            >
+              <label style={{ fontSize: 13, color: C.muted }}>
+                Columns{" "}
+                <input type="number" min="3" max="36" value={cols} onChange={(e) => resizeCols(Number(e.target.value))}
+                  style={{ width: 54, font: "inherit", fontSize: 13, padding: "4px 6px", border: "1px solid " + C.rule, borderRadius: 3, background: C.sheet, color: C.ink }} />
+              </label>
+              <label style={{ fontSize: 13, color: C.muted }}>
+                Align{" "}
+                <select value={align} onChange={(e) => setAlign(e.target.value)}
+                  style={{ font: "inherit", fontSize: 13, padding: "4px 6px", border: "1px solid " + C.rule, borderRadius: 3, background: C.sheet, color: C.ink }}>
+                  <option value="left">left</option>
+                  <option value="center">center</option>
+                  <option value="right">right</option>
+                </select>
+              </label>
+              <label style={{ fontSize: 13, color: C.muted, flex: "1 1 240px", display: "flex", gap: 6, alignItems: "center" }}>
+                Summary
+                <input value={summary} onChange={(e) => setSummary(e.target.value)} placeholder="Screen-reader description of the layout"
+                  style={{ flex: 1, font: "inherit", fontSize: 13, padding: "5px 8px", border: "1px solid " + C.rule, borderRadius: 3, background: C.sheet, color: C.ink }} />
+              </label>
+            </div>
+
+            {(note || dropped.length > 0) && (
+              <div style={{ background: C.sheet, border: "1px solid " + C.rule, borderTop: "none", borderLeft: "3px solid " + C.warn, padding: "9px 12px", fontSize: 13, color: C.warn }}>
+                {note}
+                {note && dropped.length > 0 && <br />}
+                {dropped.length > 0 && (
+                  <>
+                    {DIALECTS[dialect].label} has no tile for{" "}
+                    {dropped
+                      .slice(0, 4)
+                      .map(({ r, c, cell }) =>
+                        SHAPE_MAP[cell.s].label + " (" + STYLE_LABEL[cell.h] + "/" + STYLE_LABEL[cell.v] + ") at row " + (r + 1) + ", column " + (c + 1)
+                      )
+                      .join("; ")}
+                    {dropped.length > 4 ? " and " + (dropped.length - 4) + " more" : ""}. These draw in
+                    red and come out as blank cells.
+                  </>
+                )}
+              </div>
+            )}
+
+          </div>
+        </div>
+
+        <div style={{ marginTop: 22 }}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 8 }}>
+            <h2 style={{ fontSize: 16, fontWeight: 600, margin: 0 }}>Wikitext</h2>
+            <button onClick={copy} style={btn(false)}>{copied ? "Copied" : "Copy"}</button>
+            <span style={{ fontSize: 13, color: C.muted }}>
+              {"{{" + tplName + "}}"} syntax — editable, changes redraw the chart
+            </span>
+          </div>
+          <textarea
+            value={text}
+            onChange={(e) => editText(e.target.value)}
+            spellCheck={false}
+            wrap="off"
+            aria-label="Chart wikitext. Editing this redraws the chart above."
+            rows={Math.max(6, text.split("\n").length + 1)}
+            style={{
+              display: "block", width: "100%", boxSizing: "border-box",
+              margin: 0, padding: 14, background: C.sheet,
+              border: "1px solid " + (textError ? C.warn : C.rule),
+              font: "13px/1.7 'IBM Plex Mono', ui-monospace, monospace", color: C.ink,
+              overflowX: "auto", whiteSpace: "pre", resize: "vertical", borderRadius: 0,
+            }}
+          />
+          {textError && (
+            <p style={{ color: C.warn, fontSize: 13, margin: "8px 0 0" }}>{textError}</p>
+          )}
+          <p style={{ color: C.muted, fontSize: 13, marginTop: 10, maxWidth: "70ch" }}>
+            Paste a chart in here to load it, or hand-edit a row and watch the grid follow. Touching
+            the grid afterwards rewrites this text, so manual spacing won&rsquo;t survive the next
+            click.{" "}
+          </p>
+          <p style={{ color: C.muted, fontSize: 13, marginTop: 10, maxWidth: "70ch" }}>
+            Switching template rewrites every tile, because the same character often means different
+            things in each — <code style={{ font: "13px 'IBM Plex Mono', monospace" }}>d</code> is a
+            right-branching tee in Tree chart and a bottom-right corner in Familytree. Box identifiers
+            come from the box text and get a number appended if they would collide with a tile name or
+            with each other.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+document.getElementById("boot").remove();
+ReactDOM.createRoot(document.getElementById("root")).render(<TreeChartEditor />);
+</script>
+</body>
+</html>
